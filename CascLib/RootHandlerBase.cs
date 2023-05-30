@@ -12,7 +12,7 @@ namespace CASCLib
         public virtual int CountTotal { get; protected set; }
         public virtual int CountSelect { get; protected set; }
         public virtual int CountUnknown { get; protected set; }
-        public virtual LocaleFlags Locale { get; protected set; }
+        public virtual LocaleFlags Locale { get; set; }
         public bool OverrideArchive { get; protected set; }
 
         public abstract IEnumerable<KeyValuePair<ulong, RootEntry>> GetAllEntries();

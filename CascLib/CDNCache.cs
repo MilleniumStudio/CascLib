@@ -235,7 +235,7 @@ namespace CASCLib
 
             try
             {
-                using (var resp = Utils.HttpWebResponseGet(url))
+                using (var resp = Utils.HttpWebResponseGet(cdnPath, _config))
                 {
                     CacheMetaData meta;
                     using (Stream stream = resp.GetResponseStream())

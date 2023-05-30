@@ -121,50 +121,46 @@ namespace CASCLib
     {
         KeyValueConfig _CDNConfig;
 
-        List<KeyValueConfig> _Builds;
+        public List<KeyValueConfig> _Builds;
 
         VerBarConfig _BuildInfo;
-        VerBarConfig _CdnsData;
-        VerBarConfig _VersionsData;
+        public VerBarConfig _CdnsData;
+        public VerBarConfig _VersionsData;
 
         public string Region { get; private set; }
         public CASCGameType GameType { get; private set; }
         public static bool ValidateData { get; set; } = true;
         public static bool ThrowOnFileNotFound { get; set; } = true;
         public static bool ThrowOnMissingDecryptionKey { get; set; } = true;
-        public static bool UseWowTVFS { get; set; } = false;
+        public static bool UseWowTVFS { get; set; } = true;
         public static LoadFlags LoadFlags { get; set; } = LoadFlags.FileIndex;
 
-        private CASCConfig() { }
+        public CASCConfig() { }
 
-        public static CASCConfig LoadOnlineStorageConfig(string product, string region, bool useCurrentBuild = false, ILoggerOptions loggerOptions = null)
+        public static CASCConfig LoadOnlineStorageConfig(string customRemote, string region, bool useCurrentBuild = false, ILoggerOptions loggerOptions = null)
         {
-            if (product == null)
-                throw new ArgumentNullException(nameof(product));
+            if (customRemote == null)
+                throw new ArgumentNullException(nameof(customRemote));
             if (region == null)
                 throw new ArgumentNullException(nameof(region));
 
             Logger.Init(loggerOptions);
 
-            var config = new CASCConfig { OnlineMode = true, Region = region, Product = product };
+            var config = new CASCConfig { OnlineMode = true, Region = region, Product = "wow" };
 
-            using (var ribbit = new RibbitClient("us"))
-            using (var cdnsStream = ribbit.GetProductInfoStream(product, ProductInfoType.Cdns))
-            //using (var cdnsStream = CDNIndexHandler.OpenFileDirect(string.Format("http://us.patch.battle.net:1119/{0}/cdns", product)))
+            using (var cdnsStream = CDNIndexHandler.OpenFileDirect(string.Format(customRemote + "/cdns")))
             {
                 config._CdnsData = VerBarConfig.ReadVerBarConfig(cdnsStream);
             }
 
-            using (var ribbit = new RibbitClient("us"))
-            using (var versionsStream = ribbit.GetProductInfoStream(product, ProductInfoType.Versions))
-            //using (var versionsStream = CDNIndexHandler.OpenFileDirect(string.Format("http://us.patch.battle.net:1119/{0}/versions", product)))
+            using (var versionsStream = CDNIndexHandler.OpenFileDirect(string.Format(customRemote + "/versions")))
             {
                 config._VersionsData = VerBarConfig.ReadVerBarConfig(versionsStream);
             }
 
             CDNCache.Init(config);
 
-            config.GameType = CASCGame.DetectGameByUid(product);
+            config.GameType = CASCGame.DetectGameByUid("wow");
 
             if (File.Exists("fakecdnconfig"))
             {
@@ -429,6 +425,14 @@ namespace CASCLib
 
                     if (cdnHostIndex >= hosts.Length)
                         cdnHostIndex = 0;
+
+                    while (hosts[cdnHostIndex] == "")
+                    {
+                        cdnHostIndex++;
+
+                        if (cdnHostIndex >= hosts.Length)
+                            cdnHostIndex = 0;
+                    }
 
                     return hosts[cdnHostIndex++];
                 }

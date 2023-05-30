@@ -204,6 +204,23 @@ namespace CASCLib
             return false;
         }
 
+        public Stream OpenFile(int fileDataId, LocaleFlags Locale)
+        {
+            if (Root is WowRootHandler rh)
+            {
+                rh.Locale = Locale;
+                return OpenFile(rh.GetHashByFileDataId(fileDataId));
+            }
+
+            if (Root is WowTVFSRootHandler rh2)
+            {
+                rh2.Locale = Locale;
+                return OpenFile(rh2.GetHashByFileDataId(fileDataId));
+            }
+
+            throw new NotSupportedException("Opening files by FileDataId only supported for WoW");
+        }
+
         public override Stream OpenFile(int fileDataId)
         {
             if (Root is WowRootHandler rh)
@@ -281,7 +298,7 @@ namespace CASCLib
                 foreach (var entry in vfsEntries)
                 {
                     MD5Hash tempEKey = entry.eKey;
-                    if (FileIndex?.GetFullEKey(entry.eKey, out var fullEKey) == true)
+                    if (FileIndex.GetFullEKey(entry.eKey, out var fullEKey))
                         tempEKey = fullEKey;
                     using (Stream stream = OpenFile(tempEKey))
                     {

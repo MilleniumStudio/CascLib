@@ -31,12 +31,9 @@ namespace CASCLib
                 CDNIndex = CDNIndexHandler.Initialize(config, worker);
             }
 
-            if ((CASCConfig.LoadFlags & LoadFlags.FileIndex) != 0)
+            using (var _ = new PerfCounter("FileIndexHandler()"))
             {
-                using (var _ = new PerfCounter("FileIndexHandler()"))
-                {
-                    FileIndex = new FileIndexHandler(config);
-                }
+                FileIndex = new FileIndexHandler(config);
             }
 
             Logger.WriteLine("CASCHandlerBase: loaded {0} CDN indexes", CDNIndex.Count);

@@ -21,16 +21,20 @@ namespace CASCLib
             return $"http://{cdnHost}/{cdnPath}";
         }
 
-        private static HttpWebResponse HttpWebResponse(string url, string method = "GET", int? from = null, int? to = null, int numRetries = 0)
+        private static HttpWebResponse HttpWebResponse(string url, string method = "GET", int? from = null, int? to = null, int numRetries = 0, CASCConfig _config = null)
         {
+            string realUrl = url;
+            if (_config != null)
+                realUrl = MakeCDNUrl(_config.CDNHost, url);
+
             if (numRetries >= 5)
             {
-                string message = $"Utils: HttpWebResponse for {url} failed after 5 tries";
+                string message = $"Utils: HttpWebResponse for {realUrl} failed after 5 tries";
                 Logger.WriteLine(message);
                 throw new Exception(message);
             }
 
-            HttpWebRequest req = WebRequest.CreateHttp(url);
+            HttpWebRequest req = WebRequest.CreateHttp(realUrl);
             req.Method = method;
 
             if (method == "GET")
@@ -53,11 +57,11 @@ namespace CASCLib
                 {
                     if (exc.Status == WebExceptionStatus.ProtocolError && (resp.StatusCode == HttpStatusCode.NotFound || resp.StatusCode == (HttpStatusCode)429))
                     {
-                        return HttpWebResponse(url, method, from, to, numRetries + 1);
+                        return HttpWebResponse(url, method, from, to, numRetries + 1, _config);
                     }
                     else
                     {
-                        string message = $"Utils: error at HttpWebResponse {url}: Status {exc.Status}, StatusCode {resp.StatusCode}";
+                        string message = $"Utils: error at HttpWebResponse {realUrl}: Status {exc.Status}, StatusCode {resp.StatusCode}";
                         Logger.WriteLine(message);
                         throw new Exception(message);
                     }
@@ -70,14 +74,14 @@ namespace CASCLib
             return HttpWebResponse(url, "HEAD");
         }
 
-        public static HttpWebResponse HttpWebResponseGet(string url)
+        public static HttpWebResponse HttpWebResponseGet(string url, CASCConfig _config = null)
         {
-            return HttpWebResponse(url, "GET");
+            return HttpWebResponse(url, "GET", null, null, 0, _config);
         }
 
-        public static HttpWebResponse HttpWebResponseGetWithRange(string url, int from, int to)
+        public static HttpWebResponse HttpWebResponseGetWithRange(string url, int from, int to, CASCConfig _config = null)
         {
-            return HttpWebResponse(url, "GET", from, to);
+            return HttpWebResponse(url, "GET", from, to, 0, _config);
         }
 
         // copies whole stream

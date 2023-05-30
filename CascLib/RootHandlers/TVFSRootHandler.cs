@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
+using static CASCLib.TVFSRootPatcher;
 
 namespace CASCLib
 {
@@ -32,6 +33,9 @@ namespace CASCLib
         public ReadOnlySpan<byte> VfsTable;
         public ReadOnlySpan<byte> CftTable;
         //public ReadOnlySpan<byte> EstTable;
+
+        public MD5Hash VfsFileEKey;
+        public int PathTableReadingOffset;
     }
 
     ref struct PathBuffer
@@ -67,6 +71,53 @@ namespace CASCLib
         public int ContentOffset; // not used
         public int ContentLength;
         public int CftOffset; // only used once and not need to be stored
+    }
+
+    public class TVFSRootPatcher
+    {
+        public struct VfsPatchLocation
+        {
+            public LocaleFlags Locale;
+            public int FileDataId;
+            public MD5Hash VfsFileEKey;
+            public string CKey;
+            public int CKeyOffset;
+
+            public int EKeyOffset;
+            public int EKeySize;
+            public MD5Hash EKey;
+
+            public void SetEKeyOffset(int eKeyOffset) { EKeyOffset = eKeyOffset; }
+            public void SetEKeySize(int eKeySize) { EKeySize = eKeySize; }
+        }
+
+        public struct VFSPatchEKeyData
+        {
+            public int EKeyOffset;
+            public int EKeySize;
+            public MD5Hash EKey;
+        }
+
+        public struct PatchedFileInfo
+        {
+            public uint FileDataId;
+            public LocaleFlags Locale;
+            public byte[] PatchedEKey;
+            public byte[] PatchedCKey;
+        }
+
+        public static MultiDictionary<uint, PatchedFileInfo> PatchedFileInfos = new MultiDictionary<uint, PatchedFileInfo>();
+        public static MultiDictionary<MD5Hash, VfsPatchLocation> VFSPatchesLocations = new MultiDictionary<MD5Hash, VfsPatchLocation>();
+
+        public static void SavePatchedFileInfo(PatchedFileInfo FileInfo)
+        {
+            PatchedFileInfos.Add(FileInfo.FileDataId, FileInfo);
+        }
+
+        public static void SaveVFSPatchLocation(VfsPatchLocation LocationData)
+        {
+            VFSPatchesLocations.Add(LocationData.VfsFileEKey, LocationData);
+        }
     }
 
     public class TVFSRootHandler : RootHandlerBase
@@ -109,6 +160,7 @@ namespace CASCLib
             using (var reader = new BinaryReader(rootFile))
             {
                 CaptureDirectoryHeader(out var dirHeader, reader);
+                dirHeader.VfsFileEKey = rootEKey;
 
                 PathBuffer PathBuffer = new PathBuffer();
 
@@ -217,7 +269,7 @@ namespace CASCLib
             return (1 <= SpanCount && SpanCount <= 224) ? pbVfsFileEntry : default;
         }
 
-        private int CaptureVfsSpanEntry(ref TVFS_DIRECTORY_HEADER dirHeader, scoped ReadOnlySpan<byte> vfsSpanEntry, ref VfsRootEntry vfsRootEntry)
+        private int CaptureVfsSpanEntry(ref TVFS_DIRECTORY_HEADER dirHeader, scoped ReadOnlySpan<byte> vfsSpanEntry, ref VfsRootEntry vfsRootEntry, out VFSPatchEKeyData vfsPatchEKeyData)
         {
             ReadOnlySpan<byte> cftFileTable = dirHeader.CftTable;
             int itemSize = sizeof(int) + sizeof(int) + dirHeader.CftOffsSize;
@@ -236,6 +288,12 @@ namespace CASCLib
             eKeySlice.CopyTo(eKey);
 
             vfsRootEntry.eKey = Unsafe.As<byte, MD5Hash>(ref eKey[0]);
+
+            vfsPatchEKeyData = new VFSPatchEKeyData {
+                EKeyOffset = dirHeader.CftTableOffset + cftOffset,
+                EKeySize = dirHeader.EKeySize,
+                EKey = vfsRootEntry.eKey
+            };
 
             return itemSize;
         }
@@ -315,6 +373,7 @@ namespace CASCLib
                 using (var reader = new BinaryReader(vfsRootFile))
                 {
                     CaptureDirectoryHeader(out subHeader, reader);
+                    subHeader.VfsFileEKey = fullEKey;
                 }
                 return true;
             }
@@ -323,13 +382,17 @@ namespace CASCLib
             return false;
         }
 
-        private void ParsePathFileTable(CASCHandler casc, ref TVFS_DIRECTORY_HEADER dirHeader, ref PathBuffer pathBuffer, ReadOnlySpan<byte> pathTable)
+        private void ParsePathFileTable(CASCHandler casc, ref TVFS_DIRECTORY_HEADER dirHeader, ref PathBuffer pathBuffer, ReadOnlySpan<byte> pathTable, int pathTableReadingOffset = 0)
         {
             int savePos = pathBuffer.Position;
 
+            int localPathTableReadingOffset = 0;
+
             while (pathTable.Length > 0)
             {
+                int oldLength = pathTable.Length;
                 pathTable = CapturePathEntry(pathTable, out var pathEntry);
+                localPathTableReadingOffset += oldLength - pathTable.Length;
 
                 if (pathTable == default)
                     throw new InvalidDataException();
@@ -344,9 +407,9 @@ namespace CASCLib
 
                         Debug.Assert((pathEntry.NodeValue & TVFS_FOLDER_SIZE_MASK) >= sizeof(int));
 
-                        ParsePathFileTable(casc, ref dirHeader, ref pathBuffer, pathTable.Slice(0, dirLen));
-
+                        ParsePathFileTable(casc, ref dirHeader, ref pathBuffer, pathTable.Slice(0, dirLen), pathTableReadingOffset + localPathTableReadingOffset);
                         pathTable = pathTable.Slice(dirLen);
+                        localPathTableReadingOffset += dirLen;
                     }
                     else
                     {
@@ -358,10 +421,57 @@ namespace CASCLib
 
                         if (dwSpanCount == 1)
                         {
+                            string fileName = pathBuffer.GetString();
+
+                            VfsPatchLocation? PatchLocation = null;
+
+                            if (fileName.Length >= 21)
+                            {
+                                int fileDataId = int.Parse(fileName.Substring(13, 8), System.Globalization.NumberStyles.HexNumber);
+                                LocaleFlags locale = (LocaleFlags)int.Parse(fileName.Substring(0, 8), System.Globalization.NumberStyles.HexNumber);
+
+                                List<PatchedFileInfo> patchedFileInfos;
+                                if (PatchedFileInfos.TryGetValue((uint)fileDataId, out patchedFileInfos))
+                                {
+                                    foreach (PatchedFileInfo fileInfo in patchedFileInfos)
+                                    {
+                                        if ((fileInfo.Locale & locale) != LocaleFlags.None)
+                                        {
+                                            PatchLocation = new VfsPatchLocation
+                                            {
+                                                Locale = locale,
+                                                FileDataId = fileDataId,
+                                                VfsFileEKey = dirHeader.VfsFileEKey,
+                                                CKey = fileName.Substring(fileName.Length - 32, 32),
+                                                CKeyOffset = dirHeader.PathTableOffset + pathTableReadingOffset + localPathTableReadingOffset - 32
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+
                             VfsRootEntry vfsRootEntry = new VfsRootEntry();
 
-                            int itemSize = CaptureVfsSpanEntry(ref dirHeader, vfsSpanEntry, ref vfsRootEntry);
+                            VFSPatchEKeyData vfsPatchEKeyData;
+                            int itemSize = CaptureVfsSpanEntry(ref dirHeader, vfsSpanEntry, ref vfsRootEntry, out vfsPatchEKeyData);
                             vfsSpanEntry = vfsSpanEntry.Slice(itemSize);
+
+                            if (PatchLocation != null)
+                            {
+                                VfsPatchLocation finalPatchLocation = new VfsPatchLocation
+                                {
+                                    Locale = ((VfsPatchLocation)PatchLocation).Locale,
+                                    FileDataId = ((VfsPatchLocation)PatchLocation).FileDataId,
+                                    VfsFileEKey = ((VfsPatchLocation)PatchLocation).VfsFileEKey,
+                                    CKey = ((VfsPatchLocation)PatchLocation).CKey,
+                                    CKeyOffset = ((VfsPatchLocation)PatchLocation).CKeyOffset,
+                                    EKeySize = vfsPatchEKeyData.EKeySize,
+                                    EKeyOffset = vfsPatchEKeyData.EKeyOffset,
+                                    EKey = vfsPatchEKeyData.EKey
+                                };
+
+                                SaveVFSPatchLocation(finalPatchLocation);
+                            }
 
                             if (vfsSpanEntry == default)
                                 throw new InvalidDataException();
@@ -377,7 +487,6 @@ namespace CASCLib
                             else
                             {
                                 //string fileName = pathBuffer.ToString();
-                                string fileName = pathBuffer.GetString();
                                 string fileNameNew = MakeFileName(fileName);
                                 ulong fileHash = Hasher.ComputeHash(fileNameNew);
                                 fileTree.Add(fileHash, (fileName, fileNameNew));
@@ -408,7 +517,8 @@ namespace CASCLib
                             {
                                 VfsRootEntry vfsRootEntry = new VfsRootEntry();
 
-                                int itemSize = CaptureVfsSpanEntry(ref dirHeader, vfsSpanEntry, ref vfsRootEntry);
+                                VFSPatchEKeyData vfsPatchEKeyData;
+                                int itemSize = CaptureVfsSpanEntry(ref dirHeader, vfsSpanEntry, ref vfsRootEntry, out vfsPatchEKeyData);
                                 vfsSpanEntry = vfsSpanEntry.Slice(itemSize);
 
                                 if (vfsSpanEntry == default)
@@ -431,6 +541,8 @@ namespace CASCLib
 
                     //pathBuffer.Remove(savePos, pathBuffer.Length - savePos);
                     pathBuffer.Position = savePos;
+
+
                 }
             }
         }

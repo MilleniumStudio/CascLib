@@ -106,6 +106,8 @@ namespace CASCLib
                 for (int i = 0; i < numElements; i++)
                 {
                     MD5Hash key = br.Read<MD5Hash>();
+                    if (key.lowPart == 0xdd625246e941f4ba)
+                        stream.Position += 2 - 2;
 
                     IndexEntry entry = new IndexEntry
                     {
@@ -153,11 +155,9 @@ namespace CASCLib
             //    return ms;
             //}
 
-            string url = Utils.MakeCDNUrl(config.CDNHost, file);
-
             try
             {
-                using (var resp = Utils.HttpWebResponseGetWithRange(url, entry.Offset, entry.Offset + entry.Size - 1))
+                using (var resp = Utils.HttpWebResponseGetWithRange(file, entry.Offset, entry.Offset + entry.Size - 1, config))
                 using (Stream rstream = resp.GetResponseStream())
                 {
                     return rstream.CopyBytesToMemoryStream(entry.Size);
@@ -166,7 +166,7 @@ namespace CASCLib
             catch (WebException exc)
             {
                 var resp = (HttpWebResponse)exc.Response;
-                Logger.WriteLine($"CDNIndexHandler: error while opening {url}: Status {exc.Status}, StatusCode {resp?.StatusCode}");
+                Logger.WriteLine($"CDNIndexHandler: error while opening {file}: Status {exc.Status}, StatusCode {resp?.StatusCode}");
                 return null;
             }
         }
