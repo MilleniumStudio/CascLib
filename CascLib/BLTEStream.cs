@@ -68,6 +68,81 @@ namespace CASCLib
             Parse(eKey);
         }
 
+        public BLTEStream(Stream src)
+        {
+            _stream = src;
+            _reader = new BinaryReader(src);
+
+            Parse();
+        }
+
+        private void Parse()
+        {
+            int magic = _reader.ReadInt32();
+
+            if (magic != BLTE_MAGIC)
+                throw new BLTEDecoderException(0, "Failed to parse encoding header: invalid BLTE header bytes");
+
+            int headerSize = _reader.ReadInt32BE();
+            _hasHeader = headerSize > 0;
+
+            int numBlocks = 1;
+
+            if (_hasHeader)
+            {
+                byte[] fcbytes = _reader.ReadBytes(4);
+
+                if (fcbytes[0] != 0x0F)
+                    throw new BLTEDecoderException(0, $"Failed to parse encoding header: invalid encoding header format. Expected {0xF:x2}, but got {fcbytes[0]:x2}");
+
+                numBlocks = fcbytes[1] << 16 | fcbytes[2] << 8 | fcbytes[3] << 0;
+
+                if (numBlocks == 0)
+                    throw new BLTEDecoderException(0, $"Failed to parse encoding header: blocks count is 0");
+
+                int frameHeaderSize = 24 * numBlocks + 12;
+
+                if (headerSize != frameHeaderSize)
+                    throw new BLTEDecoderException(0, $"Failed to parse encoding header: invalid header size. Expected {frameHeaderSize}, but got {headerSize}");
+            }
+
+            _dataBlocks = new DataBlock[numBlocks];
+
+            for (int i = 0; i < numBlocks; i++)
+            {
+                DataBlock block = new DataBlock();
+
+                if (_hasHeader)
+                {
+                    block.CompSize = _reader.ReadInt32BE();
+                    block.DecompSize = _reader.ReadInt32BE();
+                    block.Hash = _reader.Read<MD5Hash>();
+                }
+                else
+                {
+                    /// RIP
+                    Console.WriteLine("RIP");
+                    //block.CompSize = size - 8;
+                    //block.DecompSize = size - 8 - 1;
+                    //block.Hash = default;
+                }
+
+                _dataBlocks[i] = block;
+            }
+
+            _memStream = new MemoryStream(_dataBlocks.Sum(b => b.DecompSize));
+
+            ProcessNextBlock();
+
+            _length = _hasHeader ? _memStream.Capacity : _memStream.Length;
+
+            //for (int i = 0; i < _dataBlocks.Length; i++)
+            //{
+            //    ProcessNextBlock();
+            //}
+        }
+
+
         private void Parse(in MD5Hash eKey)
         {
             int size = (int)_reader.BaseStream.Length;
@@ -171,7 +246,7 @@ namespace CASCLib
 
             using (NestedStream ns = new NestedStream(_stream, block.CompSize, true))
             {
-                if (_hasHeader && CASCConfig.ValidateData)
+                /*if (_hasHeader && CASCConfig.ValidateData)
                 {
                     byte[] blockHash = _md5.ComputeHash(ns);
 
@@ -179,7 +254,7 @@ namespace CASCLib
                         throw new BLTEDecoderException(0, "MD5 mismatch");
 
                     ns.Position = 0;
-                }
+                }*/
 
                 HandleDataBlock(ns, _blocksIndex);
             }

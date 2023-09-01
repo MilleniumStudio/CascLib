@@ -76,10 +76,12 @@ namespace CASCLib
     {
         public struct RootPatch
         {
-            public int EKeyOffset;
+            public int CftEntryOffset;
             public int EKeySize;
+            public int VfsEntryOffset;
             public MD5Hash EKey;
-            public MD5Hash VfsFileEKey;
+            public MD5Hash VfsFileEKey; // root key
+            public int EstOffsetSize;
         }
 
         public struct VfsPatchLocation
@@ -87,24 +89,21 @@ namespace CASCLib
             public LocaleFlags Locale;
             public int FileDataId;
             public MD5Hash VfsFileEKey;
-            public string CKey;
-            public int CKeyOffset;
+            public string CKey;            // Original C-Key
+            public int PathFileCKeyOffset; // String Hex C-Key
 
-            public int EKeyOffset;
+            public int VfsEntryOffset;
+            public int CftEntryOffset;
             public int EKeySize;
-            public MD5Hash EKey;
-
-            public void SetEKeyOffset(int eKeyOffset) { EKeyOffset = eKeyOffset; }
-            public void SetEKeySize(int eKeySize) { EKeySize = eKeySize; }
+            public int EstOffsSize;
 
             public RootPatch RootPatch;
         }
 
         public struct VFSPatchEKeyData
         {
-            public int EKeyOffset;
+            public int CftEntryOffset;
             public int EKeySize;
-            public MD5Hash EKey;
         }
 
         public struct PatchedFileInfo
@@ -113,6 +112,9 @@ namespace CASCLib
             public LocaleFlags Locale;
             public byte[] PatchedEKey;
             public byte[] PatchedCKey;
+            public uint CompressedSize;
+            public uint ContentSize;
+            public string ESpec;
         }
 
         public struct VFSPatchInfos
@@ -125,6 +127,8 @@ namespace CASCLib
         public static List<VfsPatchLocation> PendingVFSPatchesLocations = new List<VfsPatchLocation>();
         public static Dictionary<MD5Hash, VFSPatchInfos> VFSPatches = new Dictionary<MD5Hash, VFSPatchInfos>();
         public static MultiDictionary<uint, PatchedFileInfo> PatchedFileInfos = new MultiDictionary<uint, PatchedFileInfo>();
+        public static int RootFileVfsTableOffset = 0;
+        public static int RootFileCftOffset = 0;
 
         public static void SavePatchedFileInfo(PatchedFileInfo FileInfo)
         {
@@ -176,6 +180,9 @@ namespace CASCLib
             using (var rootFile = casc.OpenFile(rootEKey))
             using (var reader = new BinaryReader(rootFile))
             {
+                //rootFile.ExtractToFile("extracted/", Extensions.ToHexString(rootEKey)); ///< SHELBY DEBUG
+                rootFile.Position = 0;
+
                 CaptureDirectoryHeader(out var dirHeader, reader);
                 dirHeader.VfsFileEKey = rootEKey;
 
@@ -308,9 +315,8 @@ namespace CASCLib
 
             vfsPatchEKeyData = new VFSPatchEKeyData
             {
-                EKeyOffset = dirHeader.CftTableOffset + cftOffset,
+                CftEntryOffset = dirHeader.CftTableOffset + cftOffset,
                 EKeySize = dirHeader.EKeySize,
-                EKey = vfsRootEntry.eKey
             };
 
             return itemSize;
@@ -390,6 +396,9 @@ namespace CASCLib
                 using (var vfsRootFile = casc.OpenFile(fullEKey))
                 using (var reader = new BinaryReader(vfsRootFile))
                 {
+                    //vfsRootFile.ExtractToFile("extracted/", Extensions.ToHexString(fullEKey)); ///< SHELBY DEBUG
+                    vfsRootFile.Position = 0;
+
                     CaptureDirectoryHeader(out subHeader, reader);
                     subHeader.VfsFileEKey = fullEKey;
                 }
@@ -461,7 +470,7 @@ namespace CASCLib
                                                 FileDataId = fileDataId,
                                                 VfsFileEKey = dirHeader.VfsFileEKey,
                                                 CKey = fileName.Substring(fileName.Length - 32, 32),
-                                                CKeyOffset = dirHeader.PathTableOffset + pathTableReadingOffset + localPathTableReadingOffset - 32
+                                                PathFileCKeyOffset = dirHeader.PathTableOffset + pathTableReadingOffset + localPathTableReadingOffset - 32
                                             };
                                         }
                                     }
@@ -474,6 +483,12 @@ namespace CASCLib
                             int itemSize = CaptureVfsSpanEntry(ref dirHeader, vfsSpanEntry, ref vfsRootEntry, out vfsPatchEKeyData);
                             vfsSpanEntry = vfsSpanEntry.Slice(itemSize);
 
+                            if (fileName == ".root")
+                            {
+                                RootFileVfsTableOffset = dirHeader.VfsTableOffset + pathEntry.NodeValue;
+                                RootFileCftOffset = dirHeader.CftTableOffset + vfsRootEntry.CftOffset;
+                            }
+
                             if (PatchLocation != null)
                             {
                                 VfsPatchLocation finalPatchLocation = new VfsPatchLocation
@@ -482,10 +497,11 @@ namespace CASCLib
                                     FileDataId = ((VfsPatchLocation)PatchLocation).FileDataId,
                                     VfsFileEKey = ((VfsPatchLocation)PatchLocation).VfsFileEKey,
                                     CKey = ((VfsPatchLocation)PatchLocation).CKey,
-                                    CKeyOffset = ((VfsPatchLocation)PatchLocation).CKeyOffset,
+                                    PathFileCKeyOffset = ((VfsPatchLocation)PatchLocation).PathFileCKeyOffset,
                                     EKeySize = vfsPatchEKeyData.EKeySize,
-                                    EKeyOffset = vfsPatchEKeyData.EKeyOffset,
-                                    EKey = vfsPatchEKeyData.EKey
+                                    CftEntryOffset = vfsPatchEKeyData.CftEntryOffset,
+                                    VfsEntryOffset = dirHeader.VfsTableOffset + pathEntry.NodeValue,
+                                    EstOffsSize = dirHeader.EstOffsSize
                                 };
 
                                 SaveVFSPatchLocation(finalPatchLocation);
@@ -509,10 +525,11 @@ namespace CASCLib
                                         VfsFileEKey = subHeader.VfsFileEKey,
                                         VFSRootPatch = new RootPatch
                                         {
-                                            EKeyOffset = vfsPatchEKeyData.EKeyOffset,
+                                            CftEntryOffset = vfsPatchEKeyData.CftEntryOffset,
+                                            VfsEntryOffset = dirHeader.VfsTableOffset + pathEntry.NodeValue,
                                             EKeySize = vfsPatchEKeyData.EKeySize,
-                                            EKey = vfsPatchEKeyData.EKey,
-                                            VfsFileEKey = dirHeader.VfsFileEKey
+                                            VfsFileEKey = dirHeader.VfsFileEKey,
+                                            EstOffsetSize = dirHeader.EstOffsSize
                                         },
                                         VFSPatchesLocations = new List<VfsPatchLocation>(PendingVFSPatchesLocations)
                                     });

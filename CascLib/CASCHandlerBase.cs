@@ -170,6 +170,15 @@ namespace CASCLib
             }
         }
 
+        public MD5Hash GetFullKey(MD5Hash eKey)
+        {
+            MD5Hash tempEKey = eKey;
+            if (FileIndex?.GetFullEKey(eKey, out var fullEKey) == true)
+                tempEKey = fullEKey;
+
+            return tempEKey;
+        }
+
         public void SaveFileTo(in MD5Hash eKey, string path, string name)
         {
             MD5Hash tempEKey = eKey;
